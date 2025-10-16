@@ -10,7 +10,7 @@ import pickle
 import time
 
 # validasi dataset
-if not os.path.exists("dataset_baru.csv"):
+if not os.path.exists("data/dataset_baru.csv"):
     raise FileNotFoundError(f"Dataset tidak ditemukan di dataset_baru.csv")
 
 @st.cache_resource(show_spinner=False)
@@ -29,13 +29,13 @@ def load_models_and_data():
         
         # muat dataset
         try:
-            df_recipes = pd.read_csv("dataset_baru.csv")
+            df_recipes = pd.read_csv("data/dataset_baru.csv")
         except Exception as e:
             st.error(f"Gagal memuat dataset: {str(e)}")
             raise
         
         # gabung Title dan Ingredients untuk embedding
-        df_recipes['text_for_embedding'] = df_recipes['Title Cleaned'] + " " + df_recipes['Ingredients Cleaned']
+        df_recipes['text_for_embedding'] = df_recipes['Title Cleaned'] + " | Bahan: " + df_recipes['Ingredients Cleaned'] + " | Cara Memasak: " + df_recipes['Steps Cleaned']
         
         # cek cache embeddings
         if os.path.exists("embeddings_cache.pkl"):
@@ -139,54 +139,64 @@ def response_query(query):
         # format konteks dengan informasi
         context_parts = []
         for doc in retrieved_docs:
+            title = doc['original_title']
+            recipe_row = st.session_state.df_recipes[st.session_state.df_recipes['Title Cleaned'] == title].iloc[0]
+            steps = recipe_row['Steps Cleaned']
+
             context_parts.append(
                 f"Resep: {doc['original_title']}\n"
                 f"Bahan-bahan: {doc['ingredients']}\n"
-                f"Detail: {doc['text']}"
+                f"Cara Memasak: {steps}"
             )
         context = "\n\n".join(context_parts)
 
         prompt_template = """
-    [role]
-    Bertindaklah sebagai "Chef AI", seorang asisten koki virtual yang ahli dalam masakan Indonesia. Anda ramah, membantu, dan selalu memberikan jawaban berdasarkan data resep yang Anda miliki.
+[role]
+Berperanlah sebagai seorang chef ahli masakan indonesia yang mengerti semua hal tentang masakan indonesia.
 
-    [task]
-    Jawab pertanyaan pengguna secara akurat berdasarkan konteks resep yang relevan yang disediakan di bawah ini. Fokuslah untuk memberikan jawaban yang paling membantu sesuai dengan apa yang ditanyakan pengguna.
+[task]
+Jawab pertanyaan pengguna HANYA berdasarkan informasi dari {context} yang disediakan. boleh berimprovisasi sedikit untuk bagian cara memasak atau langkah langkah memasak, tapi untuk resep hanyak gunakan apa yang ada di dalam {context}.
 
-    Pertanyaan Pengguna: {query}
+Pertanyaan Pengguna: {query}
 
-    [context]
-    Anda hanya boleh menggunakan informasi dari resep-resep berikut untuk menyusun jawaban Anda. Jangan membuat atau menambahkan informasi (seperti bahan atau langkah) yang tidak ada dalam teks di bawah ini.
+[context]
+Konteks Resep:
+{context}
 
-    Konteks Resep:
-    {context}
+[reasoning]
+1. Identifikasi apa yang ditanyakan pengguna (bahan/resep atau cara memasak/langkah-langkah).
+2. Temukan informasi yang relevan di dalam {context}.
+3. Sajikan informasi tersebut persis seperti yang diminta dalam format di bawah.
 
-    [reasoning]
-    1.  Baca dan pahami pertanyaan pengguna untuk mengidentifikasi apa yang sebenarnya mereka butuhkan (misalnya: daftar bahan, langkah-langkah memasak, atau hanya mencari resep).
-    2.  Pindai konteks resep yang diberikan untuk menemukan informasi yang paling relevan dengan pertanyaan pengguna.
-    3.  Strukturkan jawaban Anda sesuai dengan permintaan.
-    4.  Jika pengguna bertanya tentang bahan, berikan daftar bahan dari resep yang paling relevan.
-    5.  Jika pengguna bertanya cara memasak, berikan langkah-langkah memasak secara detail dari resep yang paling relevan. Jika tidak ditanya cara memasak, jangan berikan langkah-langkahnya.
-    6.  Pastikan semua informasi dalam jawaban Anda berasal langsung dari [context] yang telah disediakan.
-    7. Jika ditanya langkah memasak, berikan langkah-langkah yang jelas dan terstruktur.
+[output format]
+- Jika ditanya bahan, berikan daftar bahan dalam bentuk bullet points.
+- Jika ditanya cara memasak, berikan langkah-langkah memasak dalam bentuk poin bernomor.
+- Jika resepnya ada, selalu sebutkan nama resepnya terlebih dahulu.
 
-    [output format]
-    Sajikan jawaban Anda dalam format yang jelas dan mudah dibaca. Gunakan poin-poin bernomor atau bullet points untuk daftar bahan atau langkah-langkah. Gunakan paragraf singkat untuk penjelasan. Awali jawaban Anda dengan menyebutkan nama resep yang Anda rujuk.
+[example]
+contoh 1 : "Apa saja bahan untuk membuat ayam geprek?"
+jawaban : 
+sayap ayam
+bawang putih
+tepung bumbu
+tepung beras
+garam
+air
+bumbu sambal
+cabe
+bawang putih
+garam
+minyak
 
-    Contoh Format:
-    "Berdasarkan resep **[Nama Resep]**, berikut adalah bahan-bahan yang Anda butuhkan:"
-    - Bahan 1
-    - Bahan 2
-    
-    "Langkah-langkah memasak:"
-    1. Langkah pertama
-    2. Langkah kedua
-    
-    (jika tidak ditanya cara memasak, jangan sertakan bagian langkah-langkah, hanya berikan bahan, nah di dalam dataset yang ada itu tidak ada langkah memasaknya, jadi anda harus improvisasi sendiri langkah memasaknya berdasarkan pengetahuan umum anda tentang masakan indonesia, tapi jangan sampai keluar dari konteks bahan yang ada)
+contoh 2 : "Bagaimana cara memasak ayam geprek?"
+jawaban : 
+Caranya seperti berikut :
+1. goreng ayam seperti ayam krispi
+2. ulek semua bahan sambal kemudian campur dengan minyak panas bekas goreng ayam
+3. geprek ayam kemudian campur dengan sambal,sajikan dengan lalapan
 
-    [stop condition]
-    Jawaban dianggap selesai ketika pertanyaan pengguna telah dijawab sepenuhnya menggunakan informasi dari konteks yang diberikan, sesuai dengan format yang diminta, dan tidak ada informasi tambahan di luar konteks yang disertakan.
-    """
+Jawaban Anda:
+"""
 
         prompt = prompt_template.format(context=context, query=query)
         llm_agent = st.session_state.llm_agent
